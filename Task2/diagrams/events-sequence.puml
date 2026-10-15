@@ -1,0 +1,49 @@
+@startuml
+title AdScale: события и защита от повторного списания
+hide footbox
+autonumber
+participant "Отправитель\nпартнёр или браузер" as source
+participant "Сборщик событий" as collector
+queue "Kafka" as kafka
+participant "Сервис учёта событий" as metering
+database "База учёта событий" as meterDb
+participant "Финансовый сервис" as finance
+database "База финансов" as financeDb
+participant "Аналитика" as analytics
+
+source -> collector : Показ, клик или уведомление об оплате
+collector -> collector : Проверить источник, формат и идентификатор
+collector -> kafka : Сохранить событие
+alt Брокер подтвердил запись
+    kafka --> collector : Подтверждение
+    collector --> source : Событие принято
+else Брокер недоступен
+    collector --> source : Приём не подтверждён
+    note over source, collector
+      Отправитель повторяет уведомление с тем же идентификатором.
+      Для финансовых событий это обязательное условие интеграции.
+    end note
+end
+
+group Обработка успешно сохранённого события
+    kafka -> metering : Доставить событие
+    metering -> meterDb : Проверить идентификатор и бизнес-ключ
+    alt Новое событие является основанием оплаты
+        metering -> meterDb : Одной транзакцией сохранить учёт\nи команду для публикации
+        metering -> kafka : Опубликовать сохранённую команду
+        kafka -> finance : Команда с billing_event_id и резервом
+        finance -> financeDb : Одной транзакцией проверить ключ\nи провести допустимое списание
+        financeDb --> finance : Результат или уже выполненная операция
+    else Повтор или событие не требует оплаты
+        metering -> metering : Новую команду списания не создавать
+    end
+    kafka -> analytics : Независимая доставка события
+    analytics -> analytics : Обновить отчёты
+end
+
+note over metering, financeDb
+  Повтор доставки допустим.
+  Повторное списание по одному основанию запрещено.
+  Получатель подтверждает обработку после сохранения результата.
+end note
+@enduml
