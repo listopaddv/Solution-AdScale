@@ -1,0 +1,38 @@
+@startuml
+!include <C4/C4_Container>
+LAYOUT_TOP_DOWN()
+title AdScale: владение данными и потоки обновлений
+
+System_Boundary(adscale, "AdScale") {
+    Container(campaign, "Сервис кампаний", "Go", "Владелец кампаний и правил")
+    ContainerDb(campaignDb, "База кампаний", "PostgreSQL", "Кампании и исходящие сообщения")
+    Container(finance, "Финансовый сервис", "Go", "Владелец денег и лимитов")
+    ContainerDb(financeDb, "База финансов", "PostgreSQL", "Платежи, резервы, списания и исходящие сообщения")
+    Container(collector, "Сборщик событий", "Go", "Принимает показы, клики и уведомления партнёров")
+    ContainerQueue(kafka, "Потоки событий", "Kafka", "События, кампании, лимиты и команды списания")
+    Container(metering, "Сервис учёта событий", "Go", "Проверяет повторы и создаёт команды списания")
+    ContainerDb(meterDb, "База учёта", "PostgreSQL", "Учёт оплачиваемых событий и исходящие команды")
+    Container(analytics, "Сервис аналитики", "Python", "Строит отчёты независимо от ставок")
+    ContainerDb(olap, "База аналитики", "ClickHouse", "События и итоги по кампаниям")
+    Container(projector, "Сервис обновления кеша", "Go", "Готовит версии данных для быстрого чтения")
+    ContainerDb(redis, "Региональный кеш", "Redis", "Копии кампаний, правил и выделенных лимитов")
+    Container(bidding, "Сервис ставок", "C++ / локальная память", "Рассчитывает ставку по действительным локальным данным")
+}
+
+Rel(campaign, campaignDb, "Читает и записывает", "SQL")
+Rel(finance, financeDb, "Проводит транзакции", "SQL")
+Rel(campaign, kafka, "Публикует изменения из БД", "Асинхронно")
+Rel(finance, kafka, "Публикует лимиты из БД", "Асинхронно")
+Rel(collector, kafka, "Публикует события", "Подтверждение после записи")
+Rel(kafka, metering, "Доставляет события", "event-accounting")
+Rel(metering, meterDb, "Сохраняет учёт и команды", "SQL")
+Rel(metering, kafka, "Публикует команды из БД", "Асинхронно")
+Rel(kafka, finance, "Доставляет команды списания", "billing")
+Rel(kafka, analytics, "Доставляет события", "analytics")
+Rel(analytics, olap, "Записывает события и читает отчёты", "SQL")
+Rel(kafka, projector, "Доставляет кампании и лимиты", "snapshot-projector")
+Rel(projector, redis, "Обновляет копии", "Redis protocol")
+Rel(bidding, redis, "Загружает в память", "Только в фоне")
+
+footer Базы доступны только владельцам. При расчёте ставки нет обращения к удалённым хранилищам.
+@enduml

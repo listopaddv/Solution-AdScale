@@ -1,0 +1,45 @@
+@startuml
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+title AdScale: репликация и восстановление данных
+
+rectangle "Рабочий регион" {
+    database "PostgreSQL: основные узлы\nКампании, финансы и учёт\nкаждый в своей БД" as primary
+    database "PostgreSQL: резервные узлы\nПо 2 копии каждой БД\nДве другие зоны" as standby
+    queue "Kafka\n3 копии раздела\n3 зоны" as kafka
+    database "ClickHouse\n2 копии каждого шарда\nРазные зоны" as clickhouse
+    database "Redis\nОсновной узел + резерв\nРазные зоны" as redis
+    component "Сервис ставок\nНесколько экземпляров\nЛокальные копии в памяти" as bidding
+}
+
+rectangle "Резервный регион" {
+    database "Копии PostgreSQL\nКампании, финансы и учёт" as remotePg
+    queue "Копия потока Kafka" as remoteKafka
+    storage "Объектное хранилище\nКопии БД, WAL, события\nи версии рекламных файлов" as backup
+    database "Региональный Redis\nДанные прогреваются отдельно" as remoteRedis
+    component "Сервис ставок\nТолько собственные\nдействительные лимиты" as remoteBid
+}
+
+primary --> standby : Подтверждение хотя бы одного резерва
+primary --> remotePg : Асинхронная репликация
+primary --> backup : Суточные копии + WAL
+kafka --> remoteKafka : Асинхронная копия потока
+kafka --> backup : Архив событий каждые 5 минут
+clickhouse --> backup : Ежедневная копия
+redis --> bidding : Фоновая загрузка
+remoteRedis --> remoteBid : Фоновая загрузка
+
+note bottom of primary
+  Перед переключением старый узел
+  лишается права записи.
+end note
+
+note bottom of remotePg
+  Межрегиональные копии могут отставать.
+  Перед возобновлением финансов нужна сверка.
+  Резервы старого обработчика не выдаются повторно.
+end note
+
+footer Обновление Redis и построение аналитики показаны на диаграмме потоков данных.
+@enduml
